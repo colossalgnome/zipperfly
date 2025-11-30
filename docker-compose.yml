@@ -1,0 +1,137 @@
+services:
+  # Reverse proxy (Caddy with automatic HTTPS)
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      zipperfly:
+        condition: service_healthy
+    networks:
+      - web
+      - internal
+
+  # Zipperfly download service
+  zipperfly:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      # Database configuration
+      DB_URL: postgres://zipperfly:zipperfly@postgres:5432/zipperfly
+      DB_MAX_CONNECTIONS: 20
+      TABLE_NAME: downloads
+      ID_FIELD: id
+
+      # Storage configuration (MinIO S3-compatible)
+      STORAGE_TYPE: s3
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: us-east-1
+      S3_FORCE_PATH_STYLE: "true"
+      S3_ACCESS_KEY_ID: minioadmin
+      S3_SECRET_ACCESS_KEY: minioadmin
+
+      # Security settings
+      ENFORCE_SIGNING: "false"
+      # SIGNING_SECRET: "your-secret-key-here"
+
+      # Feature flags
+      APPEND_YMD: "false"
+      SANITIZE_FILENAMES: "true"
+      IGNORE_MISSING: "false"
+      MAX_CONCURRENT_FETCHES: 10
+      ALLOW_PASSWORD_PROTECTED: "true"
+
+      # Resource limits
+      MAX_ACTIVE_DOWNLOADS: 100
+      MAX_FILES_PER_REQUEST: 1000
+      RATE_LIMIT_PER_IP: 10
+
+      # File extension filtering (optional)
+      # ALLOWED_EXTENSIONS: ".pdf,.txt,.jpg,.png"
+      # BLOCKED_EXTENSIONS: ".exe,.sh,.bat"
+
+      # Server configuration
+      PORT: 8080
+      ENABLE_HTTPS: "false"  # Caddy handles HTTPS
+
+      # Metrics authentication (optional)
+      # METRICS_USERNAME: admin
+      # METRICS_PASSWORD: secret
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "/bin/sh", "-c", "wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # PostgreSQL database
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: zipperfly
+      POSTGRES_PASSWORD: zipperfly
+      POSTGRES_DB: zipperfly
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro  # Optional: schema initialization
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zipperfly"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # MinIO (S3-compatible storage)
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    networks:
+      - internal
+    ports:
+      - "9001:9001"  # MinIO console (optional, for admin UI)
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+networks:
+  # External network for internet-facing services
+  web:
+    driver: bridge
+  # Internal network for backend services
+  internal:
+    driver: bridge
+
+volumes:
+  postgres-data:
+    driver: local
+  minio-data:
+    driver: local
+  caddy-data:
+    driver: local
+  caddy-config:
+    driver: local

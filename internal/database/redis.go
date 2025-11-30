@@ -28,6 +28,12 @@ func NewRedisStore(ctx context.Context, cfg *config.Config, m *metrics.Metrics) 
 		return nil, fmt.Errorf("redis parse url error: %w", err)
 	}
 
+	// Configure connection pool
+	opts.PoolSize = cfg.DBMaxConnections
+	opts.MinIdleConns = min(2, cfg.DBMaxConnections) // Keep a few connections warm (or max if max < 2)
+	opts.ConnMaxLifetime = 1 * time.Hour             // Recycle connections after 1 hour
+	opts.ConnMaxIdleTime = 30 * time.Minute          // Close idle connections after 30 min
+
 	client := redis.NewClient(opts)
 	if err := client.Ping(ctx).Err(); err != nil {
 		return nil, fmt.Errorf("redis connect error: %w", err)

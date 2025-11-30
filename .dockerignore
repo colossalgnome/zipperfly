@@ -1,0 +1,54 @@
+# Git files
+.git/
+.gitignore
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Build artifacts
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test files
+test/
+*_test.go
+coverage.out
+*.prof
+
+# Documentation
+*.md
+!README.md
+LICENSE
+
+# CI/CD
+.github/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Docker files (don't include in build context)
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Let's Encrypt cache
+certs/

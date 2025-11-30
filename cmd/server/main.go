@@ -86,6 +86,7 @@ func main() {
 		cfg.BlockedExtensions,
 		cfg.MaxActiveDownloads,
 		cfg.MaxFilesPerRequest,
+		cfg.RateLimitPerIP,
 	)
 
 	// Initialize health handler

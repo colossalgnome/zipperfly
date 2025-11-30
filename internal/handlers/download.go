@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/yeka/zip"
 	"go.uber.org/zap"
 	"golang.org/x/sync/semaphore"
+	"golang.org/x/time/rate"
 
 	"zipperfly/internal/auth"
 	"zipperfly/internal/database"
@@ -27,22 +29,24 @@ import (
 
 // Handler handles download requests
 type Handler struct {
-	logger              *zap.Logger
-	db                  database.Store
-	storage             storage.Provider
-	verifier            *auth.Verifier
-	metrics             *metrics.Metrics
-	appendYMD           bool
-	sanitizeNames       bool
-	ignoreMissing       bool
-	maxConcurrent       int64
-	callbackMaxRetries  int
-	callbackRetryDelay  time.Duration
+	logger                 *zap.Logger
+	db                     database.Store
+	storage                storage.Provider
+	verifier               *auth.Verifier
+	metrics                *metrics.Metrics
+	appendYMD              bool
+	sanitizeNames          bool
+	ignoreMissing          bool
+	maxConcurrent          int64
+	callbackMaxRetries     int
+	callbackRetryDelay     time.Duration
 	allowPasswordProtected bool
 	allowedExtensions      []string
 	blockedExtensions      []string
 	maxActiveDownloads     *semaphore.Weighted
 	maxFilesPerRequest     int
+	rateLimiters           *sync.Map // map[string]*rate.Limiter
+	rateLimitPerIP         float64
 }
 
 // NewHandler creates a new download handler
@@ -63,6 +67,7 @@ func NewHandler(
 	blockedExtensions []string,
 	maxActiveDownloads int,
 	maxFilesPerRequest int,
+	rateLimitPerIP float64,
 ) *Handler {
 	// Create semaphore for active download limiting (0 = unlimited)
 	var downloadSem *semaphore.Weighted
@@ -70,7 +75,7 @@ func NewHandler(
 		downloadSem = semaphore.NewWeighted(int64(maxActiveDownloads))
 	}
 
-	return &Handler{
+	h := &Handler{
 		logger:             logger,
 		db:                 db,
 		storage:            storageProvider,
@@ -87,12 +92,31 @@ func NewHandler(
 		blockedExtensions:      blockedExtensions,
 		maxActiveDownloads:     downloadSem,
 		maxFilesPerRequest:     maxFilesPerRequest,
+		rateLimitPerIP:         rateLimitPerIP,
 	}
+
+	// Initialize rate limiter map if rate limiting is enabled
+	if rateLimitPerIP > 0 {
+		h.rateLimiters = &sync.Map{}
+	}
+
+	return h
 }
 
 // Download handles the download request
 func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+
+	// Check rate limit (if enabled)
+	if h.rateLimitPerIP > 0 {
+		clientIP := getClientIP(r)
+		if !h.checkRateLimit(clientIP) {
+			http.Error(w, "rate limit exceeded, please retry later", http.StatusTooManyRequests)
+			h.metrics.RequestsTotal.WithLabelValues("429").Inc()
+			h.logger.Warn("download rejected: rate limit exceeded", zap.String("ip", clientIP))
+			return
+		}
+	}
 
 	// Check if we're at capacity (if limit is enabled)
 	if h.maxActiveDownloads != nil {
@@ -515,4 +539,39 @@ func (h *Handler) filterFilesByExtension(files []string) []string {
 	}
 
 	return filtered
+}
+
+// getClientIP extracts the real client IP from the request
+// Checks X-Forwarded-For and X-Real-IP headers (common in reverse proxy setups)
+func getClientIP(r *http.Request) string {
+	// Check X-Forwarded-For header (may contain multiple IPs)
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// Take the first IP (original client)
+		if idx := strings.Index(xff, ","); idx != -1 {
+			return strings.TrimSpace(xff[:idx])
+		}
+		return strings.TrimSpace(xff)
+	}
+
+	// Check X-Real-IP header
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return strings.TrimSpace(xri)
+	}
+
+	// Fall back to remote address
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return ip
+}
+
+// checkRateLimit checks if the client IP is allowed based on rate limiting
+func (h *Handler) checkRateLimit(ip string) bool {
+	// Get or create limiter for this IP
+	limiterInterface, _ := h.rateLimiters.LoadOrStore(ip, rate.NewLimiter(rate.Limit(h.rateLimitPerIP), 1))
+	limiter := limiterInterface.(*rate.Limiter)
+
+	// Check if request is allowed
+	return limiter.Allow()
 }

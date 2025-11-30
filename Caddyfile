@@ -1,0 +1,64 @@
+# Caddyfile - Reverse proxy configuration for Zipperfly
+#
+# For local development (HTTP only):
+# Replace 'downloads.example.com' with 'localhost' or ':80'
+#
+# For production (automatic HTTPS):
+# Replace 'downloads.example.com' with your actual domain
+# Caddy will automatically obtain and renew Let's Encrypt certificates
+
+downloads.example.com {
+    # Reverse proxy to zipperfly service
+    reverse_proxy zipperfly:8080 {
+        # Health check
+        health_uri /health
+        health_interval 10s
+        health_timeout 5s
+
+        # Load balancing (if you run multiple zipperfly instances)
+        lb_policy least_conn
+
+        # Connection settings
+        flush_interval -1  # Disable buffering for streaming responses
+    }
+
+    # Rate limiting (optional - uncomment to enable)
+    # rate_limit {
+    #     zone downloads {
+    #         key {remote_host}
+    #         events 100
+    #         window 1m
+    #     }
+    # }
+
+    # Logging
+    log {
+        output file /var/log/caddy/access.log
+        format json
+    }
+
+    # Headers
+    header {
+        # Security headers
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+
+        # Remove server header
+        -Server
+    }
+
+    # Metrics endpoint with basic auth (optional)
+    @metrics {
+        path /metrics
+    }
+    # basicauth @metrics {
+    #     admin $2a$14$...  # Use 'caddy hash-password' to generate
+    # }
+}
+
+# Optional: Separate domain for MinIO console
+# minio-console.example.com {
+#     reverse_proxy minio:9001
+# }

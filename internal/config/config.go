@@ -12,11 +12,12 @@ import (
 // Config holds all application configuration
 type Config struct {
 	// Database
-	DBURL     string
-	DBEngine  string
-	TableName string
-	IDField   string
-	KeyPrefix string // For Redis
+	DBURL            string
+	DBEngine         string
+	DBMaxConnections int // connection pool size (default: 20)
+	TableName        string
+	IDField          string
+	KeyPrefix        string // For Redis
 
 	// Storage
 	StorageType       string // "s3" or "local"
@@ -39,8 +40,9 @@ type Config struct {
 	RequestTimeout       time.Duration
 
 	// Resource Limits
-	MaxActiveDownloads int // max concurrent downloads, 0 = unlimited
-	MaxFilesPerRequest int // max files per download, 0 = unlimited
+	MaxActiveDownloads int     // max concurrent downloads, 0 = unlimited
+	MaxFilesPerRequest int     // max files per download, 0 = unlimited
+	RateLimitPerIP     float64 // requests per second per IP, 0 = unlimited
 
 	// Retries
 	StorageMaxRetries int
@@ -161,6 +163,9 @@ func Load() (*Config, error) {
 		}
 	}
 
+	// Parse database settings
+	dbMaxConnections := parseInt(os.Getenv("DB_MAX_CONNECTIONS"), 20)
+
 	// Parse timeouts
 	dbTimeout := parseDuration(os.Getenv("DATABASE_QUERY_TIMEOUT"), 5*time.Second)
 	storageTimeout := parseDuration(os.Getenv("STORAGE_FETCH_TIMEOUT"), 60*time.Second)
@@ -169,6 +174,7 @@ func Load() (*Config, error) {
 	// Parse resource limits
 	maxActiveDownloads := parseInt(os.Getenv("MAX_ACTIVE_DOWNLOADS"), 0)
 	maxFilesPerRequest := parseInt(os.Getenv("MAX_FILES_PER_REQUEST"), 0)
+	rateLimitPerIP := parseFloat(os.Getenv("RATE_LIMIT_PER_IP"), 0)
 
 	// Parse retry settings
 	storageMaxRetries := parseInt(os.Getenv("STORAGE_MAX_RETRIES"), 3)
@@ -191,11 +197,12 @@ func Load() (*Config, error) {
 	callbackRetryDelay := parseDuration(os.Getenv("CALLBACK_RETRY_DELAY"), 5*time.Second)
 
 	return &Config{
-		DBURL:               dbURL,
-		DBEngine:            u.Scheme,
-		TableName:           tableName,
-		IDField:             idField,
-		KeyPrefix:           os.Getenv("KEY_PREFIX"),
+		DBURL:            dbURL,
+		DBEngine:         u.Scheme,
+		DBMaxConnections: dbMaxConnections,
+		TableName:        tableName,
+		IDField:          idField,
+		KeyPrefix:        os.Getenv("KEY_PREFIX"),
 		StorageType:         storageType,
 		StoragePath:         storagePath,
 		S3Endpoint:          os.Getenv("S3_ENDPOINT"),
@@ -210,6 +217,7 @@ func Load() (*Config, error) {
 		RequestTimeout:       requestTimeout,
 		MaxActiveDownloads:   maxActiveDownloads,
 		MaxFilesPerRequest:   maxFilesPerRequest,
+		RateLimitPerIP:       rateLimitPerIP,
 		StorageMaxRetries:    storageMaxRetries,
 		StorageRetryDelay:    storageRetryDelay,
 		CircuitBreakerThreshold:   cbThreshold,
@@ -252,6 +260,17 @@ func parseInt(s string, defaultValue int) int {
 		return defaultValue
 	}
 	val, err := strconv.Atoi(s)
+	if err != nil {
+		return defaultValue
+	}
+	return val
+}
+
+func parseFloat(s string, defaultValue float64) float64 {
+	if s == "" {
+		return defaultValue
+	}
+	val, err := strconv.ParseFloat(s, 64)
 	if err != nil {
 		return defaultValue
 	}

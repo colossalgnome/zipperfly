@@ -230,6 +230,7 @@ func TestHandler_Download(t *testing.T) {
 				nil,   // allowedExtensions
 				nil,   // blockedExtensions
 			0,     // maxActiveDownloads
+			0.0,   // rateLimitPerIP
 				0,     // maxFilesPerRequest
 			)
 
@@ -364,6 +365,7 @@ func TestHandler_PrepareFilename(t *testing.T) {
 			nil,   // allowedExtensions
 			nil,   // blockedExtensions
 			0,     // maxActiveDownloads
+			0.0,   // rateLimitPerIP
 			0,     // maxFilesPerRequest
 			)
 
@@ -492,6 +494,7 @@ func TestHandler_SendCallback(t *testing.T) {
 			nil,   // allowedExtensions
 			nil,   // blockedExtensions
 			0,     // maxActiveDownloads
+			0.0,   // rateLimitPerIP
 			0,     // maxFilesPerRequest
 			)
 
@@ -576,6 +579,7 @@ func TestHandler_SendCallbackWithRetry(t *testing.T) {
 			nil,   // allowedExtensions
 			nil,   // blockedExtensions
 			0,     // maxActiveDownloads
+			0.0,   // rateLimitPerIP
 			0,     // maxFilesPerRequest
 			)
 
@@ -613,6 +617,7 @@ func TestHandler_SendCallbackWithRetry_EmptyURL(t *testing.T) {
 		nil,   // allowedExtensions
 		nil,   // blockedExtensions
 			0,     // maxActiveDownloads
+			0.0,   // rateLimitPerIP
 		0,     // maxFilesPerRequest
 	)
 

@@ -1,6 +1,6 @@
 # Implementation Status
 
-This document tracks the implementation status of zipperfly (formerly egress).
+This document tracks the implementation status of zipperfly.
 
 **Last Updated:** 2025-11-30 (Post password/filtering/headers implementation)
 
@@ -55,6 +55,9 @@ All configuration options implemented with environment variable parsing:
 **Core:**
 - `DB_URL` - Database connection (auto-detects postgres/mysql/redis)
 - `DB_ENGINE` - Force specific DB type
+- `DB_MAX_CONNECTIONS` - Connection pool size (default: 20)
+  - Small pool is efficient: each request = 1 quick query
+  - Pool reused across all concurrent requests
 - `TABLE_NAME`, `ID_FIELD` - SQL table configuration
 - `KEY_PREFIX` - Redis key prefix
 
@@ -72,6 +75,10 @@ All configuration options implemented with environment variable parsing:
 **Resource Limits:**
 - `MAX_ACTIVE_DOWNLOADS` - Max concurrent download requests (enforced, 0 = unlimited)
 - `MAX_FILES_PER_REQUEST` - Max files per download (enforced, 0 = unlimited)
+- `RATE_LIMIT_PER_IP` - Requests per second per IP (enforced, 0 = unlimited)
+  - Token bucket algorithm with burst size of 1
+  - Per-IP limiters stored in sync.Map (thread-safe)
+  - Extracts real IP from X-Forwarded-For/X-Real-IP headers
 
 **Retries:**
 - `STORAGE_MAX_RETRIES` (default: 3)
@@ -199,22 +206,30 @@ Wraps `sony/gobreaker` with:
 All three stores implement full functionality:
 
 **PostgresStore (postgres.go):**
-- Connection pooling with pgxpool
+- Connection pooling with pgxpool (configured: max/min conns, lifetimes)
+- **Dynamic column detection** - queries schema at startup to detect which optional columns exist
+- **Backward compatible** - works with minimal schema (just id, bucket, objects)
 - Query timeout enforcement
 - Metrics tracking (query duration by db_type)
 - JSON parsing for objects and custom_headers
 - NULL handling for optional fields
+- Required columns: `id` (or custom field), `bucket`, `objects`
+- Optional columns: `name`, `callback`, `password`, `custom_headers`
 
 **MySQLStore (mysql.go):**
-- Connection with database/sql
+- Connection pooling with database/sql (configured: max open/idle, lifetimes)
+- **Dynamic column detection** - queries information_schema at startup
+- **Backward compatible** - works with minimal schema
 - URL-to-DSN conversion (90% unit test coverage)
 - Query timeout enforcement
 - Metrics tracking
 - JSON parsing for arrays and maps
+- Same required/optional column support as PostgreSQL
 
 **RedisStore (redis.go):**
-- go-redis/v9 client
+- Connection pooling with go-redis/v9 (configured: pool size, idle conns)
 - Key prefix support
+- **Flexible JSON schema** - missing fields automatically handled by JSON unmarshaling
 - JSON serialization/deserialization
 - Query timeout enforcement
 - Metrics tracking
@@ -222,6 +237,13 @@ All three stores implement full functionality:
 **Factory (database.go):**
 - `New()` dispatcher based on DB_URL scheme or DB_ENGINE
 - Automatic type detection
+
+**Schema Flexibility:**
+The SQL stores detect available columns at startup, allowing you to:
+- Start with a minimal schema (id, bucket, objects only)
+- Add optional columns later without code changes
+- Skip features you don't need (e.g., no passwords → skip password column)
+- Gracefully handle legacy tables that don't have newer features
 
 ### 9. Auth Verifier (internal/auth/signature.go)
 **Status:** ✅ Complete & Tested (100% coverage)
@@ -247,6 +269,7 @@ Features:
 - Resource limits:
   - Max concurrent downloads (503 rejection when at capacity)
   - Max files per request
+  - Rate limiting per IP address (429 Too Many Requests)
 - Parallel file fetching with bounded concurrency
 - Missing file handling (IGNORE_MISSING flag)
 - Filename preparation (sanitization, YMD appending)
@@ -337,7 +360,8 @@ Features:
 - ✅ Security (HMAC signing, BasicAuth for metrics, password-protected ZIPs)
 - ✅ File extension filtering (allow/block lists)
 - ✅ Custom HTTP headers per download
-- ✅ Resource limits (max files per request)
+- ✅ Resource limits (max concurrent downloads, max files per request)
+- ✅ Rate limiting per client IP
 
 ### What's Optional/Not Critical
 - ⚠️ HTTPS/Let's Encrypt (most deployments use reverse proxy)
@@ -356,6 +380,7 @@ Features:
 - `github.com/prometheus/client_golang` - Metrics
 - `github.com/yeka/zip` - ZIP with AES encryption support
 - `golang.org/x/sync/semaphore` - Bounded concurrency
+- `golang.org/x/time/rate` - Token bucket rate limiter
 
 **Test Only:**
 - Standard Go testing framework
@@ -383,5 +408,5 @@ For production use, consider:
 
 ## 📝 Potential Future Enhancements
 
-1. Rate limiting per client/IP
-2. Request queuing (currently rejects with 503, could queue instead)
+1. Request queuing (currently rejects with 503, could queue instead)
+2. Advanced rate limiting (different limits per endpoint, authenticated vs anonymous)

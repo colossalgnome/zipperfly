@@ -309,6 +309,7 @@ func runDownloadSuite(t *testing.T, cfg *config.Config, seed func(ctx context.Co
 		cfg.AllowedExtensions,
 		cfg.BlockedExtensions,
 		cfg.MaxActiveDownloads,
+		cfg.RateLimitPerIP,
 		cfg.MaxFilesPerRequest,
 	)
 

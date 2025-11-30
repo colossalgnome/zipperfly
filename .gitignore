@@ -59,3 +59,16 @@ temp/
 *.old
 *.bak
 main.go.old
+
+# Docker volumes and data
+caddy-data/
+caddy-config/
+postgres-data/
+minio-data/
+
+# Docker override files (local development)
+docker-compose.override.yml
+
+# Database backups
+*.sql.gz
+backup.sql
