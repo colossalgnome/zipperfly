@@ -13,7 +13,18 @@ proxying large files through your main app.
     - **Local Filesystem**: NFS, Samba, or any mounted filesystem
 - **Database Backends**: Supports Postgres, MySQL, or Redis for record storage (file list, bucket, etc.).
 - **Security Options**:
-    - Optional HMAC signing and expiry for requests
+    - Optional HMAC signing and expiry for requests; if using signing, signatures should be generated against the id and expiry value, for example:
+      ```php
+        <?php
+
+        $id = '123';
+        $expiry = now()->addMinutes(15);
+        $signingKey = 'abc-123';
+        $payloadString = $id . '|' . $expiry;
+        $signature = hash_hmac('sha256', $payloadString, $signingKey);
+        
+        $url = "https://egress.example.com/$id?expiry=$expiry&signature=$signature";
+      ```
     - Basic auth for /metrics endpoint
     - Password-protected ZIPs with AES-256 encryption
     - File extension filtering (allow/block lists)
