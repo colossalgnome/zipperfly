@@ -1,0 +1,314 @@
+package config
+
+import (
+	"fmt"
+	"net/url"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// Config holds all application configuration
+type Config struct {
+	// Database
+	DBURL     string
+	DBEngine  string
+	TableName string
+	IDField   string
+	KeyPrefix string // For Redis
+
+	// Storage
+	StorageType       string // "s3" or "local"
+	StoragePath       string // For local filesystem storage
+
+	// S3
+	S3Endpoint        string
+	S3Region          string
+	S3AccessKeyID     string
+	S3SecretAccessKey string
+	S3UsePathStyle    bool
+
+	// Security
+	EnforceSigning bool
+	SigningSecret  []byte
+
+	// Timeouts (in seconds)
+	DatabaseQueryTimeout time.Duration
+	StorageFetchTimeout  time.Duration
+	RequestTimeout       time.Duration
+
+	// Resource Limits
+	MaxFileSize        int64 // bytes per individual file, 0 = unlimited
+	MaxFilesPerRequest int   // max files per download, 0 = unlimited
+
+	// Retries
+	StorageMaxRetries int
+	StorageRetryDelay time.Duration
+
+	// Circuit Breaker
+	CircuitBreakerThreshold   int           // failures before opening
+	CircuitBreakerTimeout     time.Duration // time to wait before half-open
+	CircuitBreakerMaxRequests int           // max requests in half-open state
+
+	// Features
+	AppendYMD             bool
+	SanitizeNames         bool
+	IgnoreMissing         bool
+	MaxConcurrent         int64
+	CompressionLevel      int  // 0-9, -1 = default
+	PreserveFileMetadata  bool
+	AllowPasswordProtected bool
+
+	// File Filtering
+	AllowedExtensions []string // empty = allow all
+	BlockedExtensions []string
+
+	// Callback
+	CallbackMaxRetries int
+	CallbackRetryDelay time.Duration
+
+	// Server
+	Port        string
+	EnableHTTPS bool
+
+	// Let's Encrypt
+	LetsEncryptDomains  []string
+	LetsEncryptCacheDir string
+	LetsEncryptEmail    string
+
+	// Metrics
+	MetricsUsername string
+	MetricsPassword string
+}
+
+// Load reads configuration from environment variables
+func Load() (*Config, error) {
+	dbURL := os.Getenv("DB_URL")
+	if dbURL == "" {
+		return nil, fmt.Errorf("DB_URL required")
+	}
+
+	u, err := url.Parse(dbURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid DB_URL: %w", err)
+	}
+
+	maxConcurrentStr := os.Getenv("MAX_CONCURRENT_FETCHES")
+	maxConcurrent := int64(10) // default
+	if maxConcurrentStr != "" {
+		maxConcurrent, err = strconv.ParseInt(maxConcurrentStr, 10, 64)
+		if err != nil || maxConcurrent < 1 {
+			return nil, fmt.Errorf("invalid MAX_CONCURRENT_FETCHES: %w", err)
+		}
+	}
+
+	enforceSigning, _ := strconv.ParseBool(os.Getenv("ENFORCE_SIGNING"))
+	appendYMD, _ := strconv.ParseBool(os.Getenv("APPEND_YMD"))
+	sanitizeNames, _ := strconv.ParseBool(os.Getenv("SANITIZE_FILENAMES"))
+	ignoreMissing, _ := strconv.ParseBool(os.Getenv("IGNORE_MISSING"))
+	enableHTTPS, _ := strconv.ParseBool(os.Getenv("ENABLE_HTTPS"))
+
+	idField := os.Getenv("ID_FIELD")
+	if idField == "" {
+		idField = "id"
+	}
+
+	tableName := os.Getenv("TABLE_NAME")
+	if tableName == "" {
+		tableName = "downloads"
+	}
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	s3Region := os.Getenv("S3_REGION")
+	if s3Region == "" {
+		s3Region = "auto"
+	}
+
+    s3UsePathStyle := false
+	if v := os.Getenv("S3_USE_PATH_STYLE"); v != "" {
+		if parsed, err := strconv.ParseBool(v); err == nil {
+			s3UsePathStyle = parsed
+		}
+	}
+
+	var letsEncryptDomains []string
+	if enableHTTPS {
+		domains := strings.Split(os.Getenv("LETSENCRYPT_DOMAINS"), ",")
+		if len(domains) == 0 || domains[0] == "" {
+			return nil, fmt.Errorf("LETSENCRYPT_DOMAINS required when ENABLE_HTTPS=true")
+		}
+		letsEncryptDomains = domains
+	}
+
+	letsEncryptCacheDir := os.Getenv("LETSENCRYPT_CACHE_DIR")
+	if letsEncryptCacheDir == "" {
+		letsEncryptCacheDir = "./certs"
+	}
+
+	// Determine storage type
+	storageType := os.Getenv("STORAGE_TYPE")
+	storagePath := os.Getenv("STORAGE_PATH")
+
+	// Auto-detect storage type if not specified
+	if storageType == "" {
+		if storagePath != "" {
+			storageType = "local"
+		} else {
+			storageType = "s3"
+		}
+	}
+
+	// Parse timeouts
+	dbTimeout := parseDuration(os.Getenv("DATABASE_QUERY_TIMEOUT"), 5*time.Second)
+	storageTimeout := parseDuration(os.Getenv("STORAGE_FETCH_TIMEOUT"), 60*time.Second)
+	requestTimeout := parseDuration(os.Getenv("REQUEST_TIMEOUT"), 300*time.Second)
+
+	// Parse resource limits
+	maxFileSize := parseBytes(os.Getenv("MAX_FILE_SIZE"), 0) // 0 = unlimited
+	maxFilesPerRequest := parseInt(os.Getenv("MAX_FILES_PER_REQUEST"), 0)
+
+	// Parse retry settings
+	storageMaxRetries := parseInt(os.Getenv("STORAGE_MAX_RETRIES"), 3)
+	storageRetryDelay := parseDuration(os.Getenv("STORAGE_RETRY_DELAY"), 1*time.Second)
+
+	// Parse circuit breaker settings
+	cbThreshold := parseInt(os.Getenv("CIRCUIT_BREAKER_THRESHOLD"), 5)
+	cbTimeout := parseDuration(os.Getenv("CIRCUIT_BREAKER_TIMEOUT"), 60*time.Second)
+	cbMaxRequests := parseInt(os.Getenv("CIRCUIT_BREAKER_MAX_REQUESTS"), 2)
+
+	// Parse compression level
+	compressionLevel := parseInt(os.Getenv("COMPRESSION_LEVEL"), -1) // -1 = default
+	if compressionLevel < -1 || compressionLevel > 9 {
+		compressionLevel = -1
+	}
+
+	// Parse feature flags
+	preserveMetadata, _ := strconv.ParseBool(os.Getenv("PRESERVE_FILE_METADATA"))
+	allowPasswordProtected, _ := strconv.ParseBool(os.Getenv("ALLOW_PASSWORD_PROTECTED"))
+
+	// Parse file extension filters
+	allowedExts := parseStringList(os.Getenv("ALLOWED_EXTENSIONS"))
+	blockedExts := parseStringList(os.Getenv("BLOCKED_EXTENSIONS"))
+
+	// Parse callback settings
+	callbackMaxRetries := parseInt(os.Getenv("CALLBACK_MAX_RETRIES"), 3)
+	callbackRetryDelay := parseDuration(os.Getenv("CALLBACK_RETRY_DELAY"), 5*time.Second)
+
+	return &Config{
+		DBURL:               dbURL,
+		DBEngine:            u.Scheme,
+		TableName:           tableName,
+		IDField:             idField,
+		KeyPrefix:           os.Getenv("KEY_PREFIX"),
+		StorageType:         storageType,
+		StoragePath:         storagePath,
+		S3Endpoint:          os.Getenv("S3_ENDPOINT"),
+		S3Region:            s3Region,
+		S3AccessKeyID:       os.Getenv("S3_ACCESS_KEY_ID"),
+		S3SecretAccessKey:   os.Getenv("S3_SECRET_ACCESS_KEY"),
+		S3UsePathStyle:      s3UsePathStyle,
+		EnforceSigning:      enforceSigning,
+		SigningSecret:       []byte(os.Getenv("SIGNING_SECRET")),
+		DatabaseQueryTimeout: dbTimeout,
+		StorageFetchTimeout:  storageTimeout,
+		RequestTimeout:       requestTimeout,
+		MaxFileSize:          maxFileSize,
+		MaxFilesPerRequest:   maxFilesPerRequest,
+		StorageMaxRetries:    storageMaxRetries,
+		StorageRetryDelay:    storageRetryDelay,
+		CircuitBreakerThreshold:   cbThreshold,
+		CircuitBreakerTimeout:     cbTimeout,
+		CircuitBreakerMaxRequests: cbMaxRequests,
+		AppendYMD:             appendYMD,
+		SanitizeNames:         sanitizeNames,
+		IgnoreMissing:         ignoreMissing,
+		MaxConcurrent:         maxConcurrent,
+		CompressionLevel:      compressionLevel,
+		PreserveFileMetadata:  preserveMetadata,
+		AllowPasswordProtected: allowPasswordProtected,
+		AllowedExtensions:     allowedExts,
+		BlockedExtensions:     blockedExts,
+		CallbackMaxRetries:    callbackMaxRetries,
+		CallbackRetryDelay:    callbackRetryDelay,
+		Port:                  port,
+		EnableHTTPS:           enableHTTPS,
+		LetsEncryptDomains:    letsEncryptDomains,
+		LetsEncryptCacheDir:   letsEncryptCacheDir,
+		LetsEncryptEmail:      os.Getenv("LETSENCRYPT_EMAIL"),
+		MetricsUsername:       os.Getenv("METRICS_USERNAME"),
+		MetricsPassword:       os.Getenv("METRICS_PASSWORD"),
+	}, nil
+}
+
+// Helper functions for parsing configuration values
+
+func parseDuration(s string, defaultValue time.Duration) time.Duration {
+	if s == "" {
+		return defaultValue
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return defaultValue
+	}
+	return d
+}
+
+func parseBytes(s string, defaultValue int64) int64 {
+	if s == "" {
+		return defaultValue
+	}
+	// Support suffixes: K, M, G, T
+	multiplier := int64(1)
+	if len(s) > 0 {
+		switch s[len(s)-1] {
+		case 'K', 'k':
+			multiplier = 1024
+			s = s[:len(s)-1]
+		case 'M', 'm':
+			multiplier = 1024 * 1024
+			s = s[:len(s)-1]
+		case 'G', 'g':
+			multiplier = 1024 * 1024 * 1024
+			s = s[:len(s)-1]
+		case 'T', 't':
+			multiplier = 1024 * 1024 * 1024 * 1024
+			s = s[:len(s)-1]
+		}
+	}
+	val, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return defaultValue
+	}
+	return val * multiplier
+}
+
+func parseInt(s string, defaultValue int) int {
+	if s == "" {
+		return defaultValue
+	}
+	val, err := strconv.Atoi(s)
+	if err != nil {
+		return defaultValue
+	}
+	return val
+}
+
+func parseStringList(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}

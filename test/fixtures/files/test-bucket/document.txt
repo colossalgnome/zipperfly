@@ -1,0 +1,12 @@
+This is a sample text document for testing zipperfly.
+
+It contains multiple lines of text to ensure the file has some reasonable size.
+This helps test compression ratios and file handling.
+
+Key features being tested:
+- Text file compression
+- UTF-8 encoding
+- Multiple lines
+- Basic content
+
+End of test document.
