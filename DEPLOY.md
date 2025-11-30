@@ -404,5 +404,5 @@ redis-cli SET zipperfly_downloads_<uuid> '{"bucket":"downloads","objects":["file
 ## Support
 
 - **Documentation**: See README.md and IMPLEMENTATION.md
-- **Issues**: https://github.com/yourusername/zipperfly/issues
+- **Issues**: https://github.com/colossalgnome/zipperfly/issues
 - **Metrics**: Monitor `/metrics` endpoint for insights

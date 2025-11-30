@@ -46,8 +46,8 @@ zipperfly/
 ## Installation
 1. Clone the repo:
    ```bash
-   git clone https://github.com/yourusername/s3-zip-egress.git
-   cd s3-zip-egress
+   git clone https://github.com/colossalgnome/zipperfly.git
+   cd zipperfly
    ```
 
 2. Build the binary:
