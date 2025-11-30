@@ -49,72 +49,6 @@ func TestParseDuration(t *testing.T) {
 	}
 }
 
-func TestParseBytes(t *testing.T) {
-	tests := []struct {
-		name         string
-		input        string
-		defaultValue int64
-		want         int64
-	}{
-		{
-			name:         "empty string uses default",
-			input:        "",
-			defaultValue: 1024,
-			want:         1024,
-		},
-		{
-			name:         "plain number",
-			input:        "100",
-			defaultValue: 0,
-			want:         100,
-		},
-		{
-			name:         "kilobytes",
-			input:        "10K",
-			defaultValue: 0,
-			want:         10 * 1024,
-		},
-		{
-			name:         "megabytes",
-			input:        "5M",
-			defaultValue: 0,
-			want:         5 * 1024 * 1024,
-		},
-		{
-			name:         "gigabytes",
-			input:        "2G",
-			defaultValue: 0,
-			want:         2 * 1024 * 1024 * 1024,
-		},
-		{
-			name:         "terabytes",
-			input:        "1T",
-			defaultValue: 0,
-			want:         1024 * 1024 * 1024 * 1024,
-		},
-		{
-			name:         "lowercase suffix",
-			input:        "10k",
-			defaultValue: 0,
-			want:         10 * 1024,
-		},
-		{
-			name:         "invalid input uses default",
-			input:        "abc",
-			defaultValue: 999,
-			want:         999,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := parseBytes(tt.input, tt.defaultValue)
-			if got != tt.want {
-				t.Errorf("parseBytes() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
 
 func TestParseInt(t *testing.T) {
 	tests := []struct {
@@ -247,15 +181,12 @@ func TestLoad_ValidConfig_WithHTTPSAndLocalStorage(t *testing.T) {
 	t.Setenv("DATABASE_QUERY_TIMEOUT", "10s")
 	t.Setenv("STORAGE_FETCH_TIMEOUT", "30s")
 	t.Setenv("REQUEST_TIMEOUT", "120s")
-	t.Setenv("MAX_FILE_SIZE", "10M")
 	t.Setenv("MAX_FILES_PER_REQUEST", "50")
 	t.Setenv("STORAGE_MAX_RETRIES", "5")
 	t.Setenv("STORAGE_RETRY_DELAY", "2s")
 	t.Setenv("CIRCUIT_BREAKER_THRESHOLD", "3")
 	t.Setenv("CIRCUIT_BREAKER_TIMEOUT", "5s")
 	t.Setenv("CIRCUIT_BREAKER_MAX_REQUESTS", "4")
-	t.Setenv("COMPRESSION_LEVEL", "6")
-	t.Setenv("PRESERVE_FILE_METADATA", "true")
 	t.Setenv("ALLOW_PASSWORD_PROTECTED", "true")
 	t.Setenv("ALLOWED_EXTENSIONS", ".txt,.csv")
 	t.Setenv("BLOCKED_EXTENSIONS", ".exe,.bat")
@@ -305,9 +236,6 @@ func TestLoad_ValidConfig_WithHTTPSAndLocalStorage(t *testing.T) {
 	if cfg.RequestTimeout != 120*time.Second {
 		t.Errorf("unexpected RequestTimeout: %v", cfg.RequestTimeout)
 	}
-	if cfg.MaxFileSize != 10*1024*1024 {
-		t.Errorf("expected MaxFileSize=10M, got %d", cfg.MaxFileSize)
-	}
 	if cfg.MaxFilesPerRequest != 50 {
 		t.Errorf("expected MaxFilesPerRequest=50, got %d", cfg.MaxFilesPerRequest)
 	}
@@ -325,12 +253,6 @@ func TestLoad_ValidConfig_WithHTTPSAndLocalStorage(t *testing.T) {
 	}
 	if cfg.CircuitBreakerMaxRequests != 4 {
 		t.Errorf("expected CircuitBreakerMaxRequests=4, got %d", cfg.CircuitBreakerMaxRequests)
-	}
-	if cfg.CompressionLevel != 6 {
-		t.Errorf("expected CompressionLevel=6, got %d", cfg.CompressionLevel)
-	}
-	if !cfg.PreserveFileMetadata {
-		t.Errorf("expected PreserveFileMetadata=true")
 	}
 	if !cfg.AllowPasswordProtected {
 		t.Errorf("expected AllowPasswordProtected=true")
@@ -359,23 +281,6 @@ func TestParseHelpers(t *testing.T) {
 	}
 	if got := parseDuration("not-a-duration", 5*time.Second); got != 5*time.Second {
 		t.Errorf("parseDuration invalid: expected default 5s, got %v", got)
-	}
-
-	// parseBytes
-	if got := parseBytes("10K", 0); got != 10*1024 {
-		t.Errorf("parseBytes 10K expected %d, got %d", 10*1024, got)
-	}
-	if got := parseBytes("2M", 0); got != 2*1024*1024 {
-		t.Errorf("parseBytes 2M expected %d, got %d", 2*1024*1024, got)
-	}
-	if got := parseBytes("3G", 0); got != 3*1024*1024*1024 {
-		t.Errorf("parseBytes 3G expected %d, got %d", 3*1024*1024*1024, got)
-	}
-	if got := parseBytes("4T", 0); got != 4*1024*1024*1024*1024 {
-		t.Errorf("parseBytes 4T expected %d, got %d", 4*1024*1024*1024*1024, got)
-	}
-	if got := parseBytes("bad", 123); got != 123 {
-		t.Errorf("parseBytes invalid input expected default 123, got %d", got)
 	}
 
 	// parseInt

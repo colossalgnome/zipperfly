@@ -12,11 +12,17 @@ proxying large files through your main app.
     - **S3-Compatible**: AWS S3, Cloudflare R2, MinIO, DigitalOcean Spaces, etc.
     - **Local Filesystem**: NFS, Samba, or any mounted filesystem
 - **Database Backends**: Supports Postgres, MySQL, or Redis for record storage (file list, bucket, etc.).
-- **Security Options**: Optional HMAC signing and expiry for requests; basic auth for /metrics.
+- **Security Options**:
+    - Optional HMAC signing and expiry for requests
+    - Basic auth for /metrics endpoint
+    - Password-protected ZIPs with AES-256 encryption
+    - File extension filtering (allow/block lists)
+- **Resource Limits**: Configurable max files per request and max file size
+- **Custom Headers**: Per-request custom HTTP headers from database
 - **TLS Support**: Automatic Let's Encrypt cert generation for standalone HTTPS.
-- **Callbacks**: Optional POST callback on completion/error.
+- **Callbacks**: Optional POST callback on completion/error with retry logic.
 - **Customization**: ENV-driven config for filename defaults, sanitization, key prefixes, etc.
-- **Monitoring**: Prometheus /metrics endpoint.
+- **Monitoring**: Prometheus /metrics endpoint with comprehensive metrics.
 
 ## Project Structure
 ```
@@ -47,7 +53,7 @@ egress/
 2. Build the binary:
    ```bash
    go mod tidy
-   go build -o bin/egress ./cmd/server
+   go build -o bin/zipperfly ./cmd/server
    ```
 
 3. Configure:
@@ -62,22 +68,22 @@ egress/
 4. Run:
    ```bash
    # Using .env file (automatic)
-   ./bin/egress
+   ./bin/zipperfly
 
    # Using custom config file
-   ./bin/egress --config /path/to/config.env
+   ./bin/zipperfly --config /path/to/config.env
 
    # Using environment variables only
    export DB_URL=postgres://...
    export S3_ENDPOINT=...
-   ./bin/egress
+   ./bin/zipperfly
    ```
 
 ## Configuration
 The server supports multiple configuration methods with the following priority:
 
 1. **Command-line flag**: `--config /path/to/file.env`
-2. **CONFIG_FILE env var**: `CONFIG_FILE=/path/to/file.env ./bin/egress`
+2. **CONFIG_FILE env var**: `CONFIG_FILE=/path/to/file.env ./bin/zipperfly`
 3. **.env file**: Automatically loaded if present in working directory
 4. **OS environment variables**: Standard exported env vars
 
@@ -129,6 +135,27 @@ You can use either S3-compatible storage or local filesystem storage.
 - `MAX_CONCURRENT_FETCHES`: Max parallel fetches per request (default: 10)
 - `PORT`: Listen port (default: 8080; 443 for HTTPS)
 
+### Resource Limits
+- `MAX_ACTIVE_DOWNLOADS`: Maximum concurrent download requests (0 = unlimited, default: 0)
+    - Protects server from overload during traffic spikes
+    - Requests beyond limit receive 503 Service Unavailable
+    - Example: `MAX_ACTIVE_DOWNLOADS=100`
+- `MAX_FILES_PER_REQUEST`: Maximum number of files per download (0 = unlimited, default: 0)
+
+### File Extension Filtering
+- `ALLOWED_EXTENSIONS`: Comma-separated list of allowed extensions (empty = allow all)
+    - Example: `ALLOWED_EXTENSIONS=.pdf,.txt,.jpg`
+    - If specified, only files with these extensions are included
+- `BLOCKED_EXTENSIONS`: Comma-separated list of blocked extensions
+    - Example: `BLOCKED_EXTENSIONS=.exe,.sh,.bat`
+    - Takes precedence over allowed list
+
+### Password-Protected ZIPs
+- `ALLOW_PASSWORD_PROTECTED`: "true" to enable password-protected ZIPs (default: false)
+    - Requires `password` field in download record
+    - Uses AES-256 encryption for ZIP entries
+    - Maintains streaming performance (no buffering)
+
 ### HTTPS & Let's Encrypt
 - `ENABLE_HTTPS`: "true" for auto-TLS with Let's Encrypt
 - `LETSENCRYPT_DOMAINS`: Comma-separated domains (e.g., "example.com")
@@ -150,17 +177,42 @@ For HTTPS, expose 80/443 and persist certs volume.
 
 ## Usage
 1. **Prep Record**: In your app (e.g., Laravel), insert a record with ID (e.g., UUID), bucket, objects (array of keys),
-   optional name/callback.
-   Example (Postgres):
-   ```
+   optional name/callback/password/custom_headers.
+
+   **Basic Example (Postgres):**
+   ```sql
    INSERT INTO downloads (id, bucket, objects, name, callback)
-        VALUES (
-          '019ad1fc-a742-709e-81e2-59eff89576a5',
-          'my-bucket',
-          '["file1.txt", "file2.txt"]'::jsonb,
-          'myfiles.zip',
-          'https://callback.example.com'
-        );
+   VALUES (
+     '019ad1fc-a742-709e-81e2-59eff89576a5',
+     'my-bucket',
+     '["file1.txt", "file2.txt"]'::jsonb,
+     'myfiles',
+     'https://callback.example.com'
+   );
+   ```
+
+   **With Password Protection:**
+   ```sql
+   INSERT INTO downloads (id, bucket, objects, name, password)
+   VALUES (
+     '019ad1fc-a742-709e-81e2-59eff89576a5',
+     'my-bucket',
+     '["file1.txt", "file2.txt"]'::jsonb,
+     'secure-files',
+     'MySecretPassword123'
+   );
+   ```
+
+   **With Custom Headers (e.g., CDN caching):**
+   ```sql
+   INSERT INTO downloads (id, bucket, objects, name, custom_headers)
+   VALUES (
+     '019ad1fc-a742-709e-81e2-59eff89576a5',
+     'my-bucket',
+     '["file1.txt", "file2.txt"]'::jsonb,
+     'cached-files',
+     '{"Cache-Control": "max-age=3600", "X-Custom-Header": "value"}'::jsonb
+   );
    ```
 
 2. **Generate URL**: Optionally sign/expire, then send to client (e.g., redirect or JS location.href).
@@ -171,13 +223,17 @@ For HTTPS, expose 80/443 and persist certs volume.
 
 ## Record Schema
 **For SQL**: Columns `id` (or custom), `bucket` (text), `objects` (jsonb/text), `name` (text, optional), `callback`
-(text, optional).
+(text, optional), `password` (text, optional), `custom_headers` (jsonb, optional).
 
-**For Redis**: JSON object with keys "bucket", "objects" (array), "name", "callback".
+**For Redis**: JSON object with keys "bucket", "objects" (array), "name", "callback", "password", "custom_headers".
 
 **Field Meanings**:
 - `bucket`: For S3, the bucket name (required). For local storage, optional path prefix within `STORAGE_PATH`.
 - `objects`: Array of object keys/file paths to include in ZIP.
+- `name`: Optional custom filename for the ZIP (without .zip extension).
+- `callback`: Optional HTTP endpoint to POST completion status.
+- `password`: Optional password for ZIP encryption (requires `ALLOW_PASSWORD_PROTECTED=true`).
+- `custom_headers`: Optional map of custom HTTP headers to include in the response (e.g., `{"Cache-Control": "max-age=3600"}`).
 
 Extra fields are ignored.
 

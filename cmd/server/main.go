@@ -81,6 +81,11 @@ func main() {
 		cfg.MaxConcurrent,
 		cfg.CallbackMaxRetries,
 		cfg.CallbackRetryDelay,
+		cfg.AllowPasswordProtected,
+		cfg.AllowedExtensions,
+		cfg.BlockedExtensions,
+		cfg.MaxActiveDownloads,
+		cfg.MaxFilesPerRequest,
 	)
 
 	// Initialize health handler

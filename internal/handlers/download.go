@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/yeka/zip"
 	"go.uber.org/zap"
 	"golang.org/x/sync/semaphore"
 
@@ -38,6 +38,11 @@ type Handler struct {
 	maxConcurrent       int64
 	callbackMaxRetries  int
 	callbackRetryDelay  time.Duration
+	allowPasswordProtected bool
+	allowedExtensions      []string
+	blockedExtensions      []string
+	maxActiveDownloads     *semaphore.Weighted
+	maxFilesPerRequest     int
 }
 
 // NewHandler creates a new download handler
@@ -53,7 +58,18 @@ func NewHandler(
 	maxConcurrent int64,
 	callbackMaxRetries int,
 	callbackRetryDelay time.Duration,
+	allowPasswordProtected bool,
+	allowedExtensions []string,
+	blockedExtensions []string,
+	maxActiveDownloads int,
+	maxFilesPerRequest int,
 ) *Handler {
+	// Create semaphore for active download limiting (0 = unlimited)
+	var downloadSem *semaphore.Weighted
+	if maxActiveDownloads > 0 {
+		downloadSem = semaphore.NewWeighted(int64(maxActiveDownloads))
+	}
+
 	return &Handler{
 		logger:             logger,
 		db:                 db,
@@ -66,12 +82,28 @@ func NewHandler(
 		maxConcurrent:      maxConcurrent,
 		callbackMaxRetries: callbackMaxRetries,
 		callbackRetryDelay: callbackRetryDelay,
+		allowPasswordProtected: allowPasswordProtected,
+		allowedExtensions:      allowedExtensions,
+		blockedExtensions:      blockedExtensions,
+		maxActiveDownloads:     downloadSem,
+		maxFilesPerRequest:     maxFilesPerRequest,
 	}
 }
 
 // Download handles the download request
 func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+
+	// Check if we're at capacity (if limit is enabled)
+	if h.maxActiveDownloads != nil {
+		if !h.maxActiveDownloads.TryAcquire(1) {
+			http.Error(w, "server at capacity, please retry", http.StatusServiceUnavailable)
+			h.metrics.RequestsTotal.WithLabelValues("503").Inc()
+			h.logger.Warn("download rejected: server at capacity")
+			return
+		}
+		defer h.maxActiveDownloads.Release(1)
+	}
 
 	// Track active downloads
 	h.metrics.ActiveDownloads.Inc()
@@ -114,8 +146,31 @@ func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check resource limits
+	if h.maxFilesPerRequest > 0 && len(record.Objects) > h.maxFilesPerRequest {
+		http.Error(w, fmt.Sprintf("too many files: requested %d, max %d", len(record.Objects), h.maxFilesPerRequest), http.StatusBadRequest)
+		h.logger.Warn("too many files requested", zap.String("id", id), zap.Int("requested", len(record.Objects)), zap.Int("max", h.maxFilesPerRequest))
+		h.metrics.RequestsTotal.WithLabelValues("400").Inc()
+		return
+	}
+
+	// Filter files by extension
+	filteredObjects := h.filterFilesByExtension(record.Objects)
+	if len(filteredObjects) == 0 {
+		http.Error(w, "no allowed files in request", http.StatusBadRequest)
+		h.logger.Warn("all files filtered by extension", zap.String("id", id), zap.Int("original", len(record.Objects)))
+		h.metrics.RequestsTotal.WithLabelValues("400").Inc()
+		return
+	}
+	record.Objects = filteredObjects
+
 	// Prepare filename
 	filename := h.prepareFilename(record.Name)
+
+	// Apply custom headers from record (before standard headers)
+	for key, value := range record.CustomHeaders {
+		w.Header().Set(key, value)
+	}
 
 	// Set response headers
 	w.Header().Set("Content-Type", "application/zip")
@@ -126,9 +181,16 @@ func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
 	zw := zip.NewWriter(outBc)
 	defer zw.Close()
 
+	// Determine password for ZIP encryption
+	zipPassword := ""
+	if record.Password != "" && h.allowPasswordProtected {
+		zipPassword = record.Password
+		h.logger.Debug("password protection enabled", zap.String("id", id))
+	}
+
 	// Stream files from storage
 	var inBytes int64
-	successCount, fetchErr := h.streamFilesFromStorage(ctx, zw, record, &inBytes)
+	successCount, fetchErr := h.streamFilesFromStorage(ctx, zw, record, &inBytes, zipPassword)
 
 	// Check if client disconnected
 	if ctx.Err() != nil {
@@ -213,6 +275,7 @@ func (h *Handler) streamFilesFromStorage(
     zw *zip.Writer,
     record *models.DownloadRecord,
     inBytes *int64,
+    password string,
 ) (int, error) {
     sem := semaphore.NewWeighted(h.maxConcurrent)
     var zipMu sync.Mutex
@@ -261,6 +324,11 @@ func (h *Handler) streamFilesFromStorage(
             header := &zip.FileHeader{
                 Name:   filepath.Base(key),
                 Method: zip.Deflate,
+            }
+
+            // Set password if provided
+            if password != "" {
+                header.SetPassword(password)
             }
 
             fw, err := zw.CreateHeader(header)
@@ -403,4 +471,48 @@ func sanitizeFilename(name string) string {
 	}, name)
 	name = strings.Trim(name, " .")
 	return name
+}
+
+// filterFilesByExtension filters files based on allowed/blocked extension lists
+func (h *Handler) filterFilesByExtension(files []string) []string {
+	// If no filtering configured, return all files
+	if len(h.allowedExtensions) == 0 && len(h.blockedExtensions) == 0 {
+		return files
+	}
+
+	filtered := make([]string, 0, len(files))
+	for _, file := range files {
+		ext := strings.ToLower(filepath.Ext(file))
+
+		// Check blocked list first
+		blocked := false
+		for _, blockedExt := range h.blockedExtensions {
+			if ext == blockedExt {
+				blocked = true
+				break
+			}
+		}
+		if blocked {
+			continue
+		}
+
+		// If allowed list is specified, file must be in it
+		if len(h.allowedExtensions) > 0 {
+			allowed := false
+			for _, allowedExt := range h.allowedExtensions {
+				if ext == allowedExt {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				continue
+			}
+		}
+
+		// File passed all checks
+		filtered = append(filtered, file)
+	}
+
+	return filtered
 }

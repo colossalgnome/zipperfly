@@ -305,6 +305,11 @@ func runDownloadSuite(t *testing.T, cfg *config.Config, seed func(ctx context.Co
 		cfg.MaxConcurrent,   // max concurrent file fetches
 		cfg.CallbackMaxRetries,
 		cfg.CallbackRetryDelay,
+		cfg.AllowPasswordProtected,
+		cfg.AllowedExtensions,
+		cfg.BlockedExtensions,
+		cfg.MaxActiveDownloads,
+		cfg.MaxFilesPerRequest,
 	)
 
 	runDownloadTests(t, downloadHandler)

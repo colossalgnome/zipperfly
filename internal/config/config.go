@@ -39,8 +39,8 @@ type Config struct {
 	RequestTimeout       time.Duration
 
 	// Resource Limits
-	MaxFileSize        int64 // bytes per individual file, 0 = unlimited
-	MaxFilesPerRequest int   // max files per download, 0 = unlimited
+	MaxActiveDownloads int // max concurrent downloads, 0 = unlimited
+	MaxFilesPerRequest int // max files per download, 0 = unlimited
 
 	// Retries
 	StorageMaxRetries int
@@ -56,8 +56,6 @@ type Config struct {
 	SanitizeNames         bool
 	IgnoreMissing         bool
 	MaxConcurrent         int64
-	CompressionLevel      int  // 0-9, -1 = default
-	PreserveFileMetadata  bool
 	AllowPasswordProtected bool
 
 	// File Filtering
@@ -169,7 +167,7 @@ func Load() (*Config, error) {
 	requestTimeout := parseDuration(os.Getenv("REQUEST_TIMEOUT"), 300*time.Second)
 
 	// Parse resource limits
-	maxFileSize := parseBytes(os.Getenv("MAX_FILE_SIZE"), 0) // 0 = unlimited
+	maxActiveDownloads := parseInt(os.Getenv("MAX_ACTIVE_DOWNLOADS"), 0)
 	maxFilesPerRequest := parseInt(os.Getenv("MAX_FILES_PER_REQUEST"), 0)
 
 	// Parse retry settings
@@ -181,14 +179,7 @@ func Load() (*Config, error) {
 	cbTimeout := parseDuration(os.Getenv("CIRCUIT_BREAKER_TIMEOUT"), 60*time.Second)
 	cbMaxRequests := parseInt(os.Getenv("CIRCUIT_BREAKER_MAX_REQUESTS"), 2)
 
-	// Parse compression level
-	compressionLevel := parseInt(os.Getenv("COMPRESSION_LEVEL"), -1) // -1 = default
-	if compressionLevel < -1 || compressionLevel > 9 {
-		compressionLevel = -1
-	}
-
 	// Parse feature flags
-	preserveMetadata, _ := strconv.ParseBool(os.Getenv("PRESERVE_FILE_METADATA"))
 	allowPasswordProtected, _ := strconv.ParseBool(os.Getenv("ALLOW_PASSWORD_PROTECTED"))
 
 	// Parse file extension filters
@@ -217,7 +208,7 @@ func Load() (*Config, error) {
 		DatabaseQueryTimeout: dbTimeout,
 		StorageFetchTimeout:  storageTimeout,
 		RequestTimeout:       requestTimeout,
-		MaxFileSize:          maxFileSize,
+		MaxActiveDownloads:   maxActiveDownloads,
 		MaxFilesPerRequest:   maxFilesPerRequest,
 		StorageMaxRetries:    storageMaxRetries,
 		StorageRetryDelay:    storageRetryDelay,
@@ -228,8 +219,6 @@ func Load() (*Config, error) {
 		SanitizeNames:         sanitizeNames,
 		IgnoreMissing:         ignoreMissing,
 		MaxConcurrent:         maxConcurrent,
-		CompressionLevel:      compressionLevel,
-		PreserveFileMetadata:  preserveMetadata,
 		AllowPasswordProtected: allowPasswordProtected,
 		AllowedExtensions:     allowedExts,
 		BlockedExtensions:     blockedExts,
@@ -256,35 +245,6 @@ func parseDuration(s string, defaultValue time.Duration) time.Duration {
 		return defaultValue
 	}
 	return d
-}
-
-func parseBytes(s string, defaultValue int64) int64 {
-	if s == "" {
-		return defaultValue
-	}
-	// Support suffixes: K, M, G, T
-	multiplier := int64(1)
-	if len(s) > 0 {
-		switch s[len(s)-1] {
-		case 'K', 'k':
-			multiplier = 1024
-			s = s[:len(s)-1]
-		case 'M', 'm':
-			multiplier = 1024 * 1024
-			s = s[:len(s)-1]
-		case 'G', 'g':
-			multiplier = 1024 * 1024 * 1024
-			s = s[:len(s)-1]
-		case 'T', 't':
-			multiplier = 1024 * 1024 * 1024 * 1024
-			s = s[:len(s)-1]
-		}
-	}
-	val, err := strconv.ParseInt(s, 10, 64)
-	if err != nil {
-		return defaultValue
-	}
-	return val * multiplier
 }
 
 func parseInt(s string, defaultValue int) int {

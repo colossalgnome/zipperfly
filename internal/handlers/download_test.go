@@ -226,6 +226,11 @@ func TestHandler_Download(t *testing.T) {
 				10, // maxConcurrent
 				0,  // callbackMaxRetries
 				0,  // callbackRetryDelay
+				false, // allowPasswordProtected
+				nil,   // allowedExtensions
+				nil,   // blockedExtensions
+			0,     // maxActiveDownloads
+				0,     // maxFilesPerRequest
 			)
 
 			// Create request
@@ -355,6 +360,11 @@ func TestHandler_PrepareFilename(t *testing.T) {
 				10,
 				0,
 				0,
+			false, // allowPasswordProtected
+			nil,   // allowedExtensions
+			nil,   // blockedExtensions
+			0,     // maxActiveDownloads
+			0,     // maxFilesPerRequest
 			)
 
 			result := h.prepareFilename(tt.inputName)
@@ -478,6 +488,11 @@ func TestHandler_SendCallback(t *testing.T) {
 				10,
 				0,
 				0,
+			false, // allowPasswordProtected
+			nil,   // allowedExtensions
+			nil,   // blockedExtensions
+			0,     // maxActiveDownloads
+			0,     // maxFilesPerRequest
 			)
 
 			payload := models.CallbackPayload{
@@ -557,6 +572,11 @@ func TestHandler_SendCallbackWithRetry(t *testing.T) {
 				10,
 				tt.maxRetries,
 				tt.retryDelay,
+			false, // allowPasswordProtected
+			nil,   // allowedExtensions
+			nil,   // blockedExtensions
+			0,     // maxActiveDownloads
+			0,     // maxFilesPerRequest
 			)
 
 			payload := models.CallbackPayload{
@@ -589,6 +609,11 @@ func TestHandler_SendCallbackWithRetry_EmptyURL(t *testing.T) {
 		10,
 		3,
 		1*time.Millisecond,
+		false, // allowPasswordProtected
+		nil,   // allowedExtensions
+		nil,   // blockedExtensions
+			0,     // maxActiveDownloads
+		0,     // maxFilesPerRequest
 	)
 
 	payload := models.CallbackPayload{
